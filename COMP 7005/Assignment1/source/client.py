@@ -5,8 +5,8 @@ import tqdm
 import time
 
 # Define the server address (host and port)
-server_host = "127.0.0.1"
-server_port = 12345
+socket_path = "/tmp/my_unix_socket"
+
 
 def send_files(SEPARATOR, file_names, client_socket):
     try:
@@ -28,11 +28,14 @@ def send_files(SEPARATOR, file_names, client_socket):
                         break
                     client_socket.send(data)
                     progress.update(len(data))
-                    if file_size < 4096:
-                        time.sleep(1)
-                    elif file_size >= 4096:
-                        time.sleep(2)
-
+            if file_size >= 3073741824:
+                time.sleep(30)
+            elif file_size >= 1073741824:
+                time.sleep(10)
+            elif file_size >= 1000000:
+                time.sleep(2)
+            else:
+                time.sleep(1)
             
     except FileNotFoundError:
         print("File not found.")
@@ -48,18 +51,16 @@ def send_files(SEPARATOR, file_names, client_socket):
 
 def main():
     # Define the path to the Unix domain socket
-    socket_path = "/tmp/my_unix_socket"
     SEPARATOR = "|"
     BUFFER_SIZE = 4096
-    client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    client_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
 
     try:
         # Connect to the server
-        client_socket.connect((server_host, server_port))
+        client_socket.connect(socket_path)
 
         # Get file names from command-line arguments
         file_names = sys.argv[1:]
-        # file_names = ["/home/sajjin/Documents/School_Code/COMP 7005/Assignment1/is.txt", "/home/sajjin/Documents/School_Code/COMP 7005/Assignment1/a.png"]
 
         #  Send multiple files to the server
         send_files( SEPARATOR, file_names, client_socket)
