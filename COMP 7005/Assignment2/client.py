@@ -4,35 +4,55 @@ import os
 import tqdm
 import time
 
-# Define the server address (host and port)
-server_host = "127.0.0.1"
+server_host = "10.0.0.137"
 server_port = 12345
+
+
+def utf8len(s):
+    return len(s.encode('utf-8'))
+
 
 def send_files(SEPARATOR, file_names, client_socket):
     try:
 
         for file_name in file_names:
-
-
+            
             file_size = os.path.getsize(file_name)
-            client_socket.send(f"{file_name}{SEPARATOR}{file_size}".encode())
+
+            file_name_size = utf8len(file_name)
+            file_size_size = utf8len(str(file_size))
+            client_socket.send(f"{file_name_size}{SEPARATOR}{file_size_size}{SEPARATOR}".encode())
+            confirmation = "NOT OK"
+
+            while confirmation != "OK":
+                confirmation = client_socket.recv(1024).decode('utf-8')
+
+
+                client_socket.send(f"{file_name}{SEPARATOR}{file_size}".encode())
+                if file_size >= 3073741824:
+                    time.sleep(2)
+                
+                time.sleep(1)
 
 
             # Open the file and send its contents to the server
             progress = tqdm.tqdm(range(file_size), f"Sending {file_name}", unit="B", unit_scale=True, unit_divisor=1024)
             with open(file_name, 'rb') as file:
                 while True:
- 
+
                     data = file.read(file_size)
                     if not data:
                         break
                     client_socket.send(data)
                     progress.update(len(data))
-            if file_size < 4096:
-                time.sleep(1)
-            elif file_size >= 4096:
+            if file_size >= 3073741824:
+                time.sleep(30)
+            elif file_size >= 1073741824:
+                time.sleep(10)
+            elif file_size >= 1000000:
                 time.sleep(2)
-
+            
+            time.sleep(2)
             
     except FileNotFoundError:
         print("File not found.")
@@ -44,12 +64,10 @@ def send_files(SEPARATOR, file_names, client_socket):
             
 
 
-# Create a Unix domain socket client
 
 def main():
     # Define the path to the Unix domain socket
     SEPARATOR = "|"
-    BUFFER_SIZE = 4096
     client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 
     try:
@@ -58,8 +76,9 @@ def main():
 
         # Get file names from command-line arguments
         file_names = sys.argv[1:]
-
+        # file_names = ["test.txt", "test2.txt, test.jpeg"]
         #  Send multiple files to the server
+        time.sleep(5)
         send_files( SEPARATOR, file_names, client_socket)
     except ConnectionRefusedError:
         print("Connection to the server failed.")
