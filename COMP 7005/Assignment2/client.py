@@ -3,13 +3,36 @@ import sys
 import os
 import tqdm
 import time
-
-server_host = "10.0.0.137"
-server_port = 12345
+import argparse
 
 
 def utf8len(s):
     return len(s.encode('utf-8'))
+
+def ip_address():
+    # Create an argument parser
+    parser = argparse.ArgumentParser(description="A Python script that accepts an IP address.")
+
+    # Add an argument for the IP address starting with -i
+    parser.add_argument("-i", "--ipaddress", required=True, help="IP address")
+    # Parse the command-line arguments
+    args = parser.parse_args()
+
+    ipAddress = args.ipaddress
+    return ipAddress
+
+
+def port_number():
+    # Create an argument parser
+    parser = argparse.ArgumentParser(description="A Python script that accepts a port number.")
+
+    # Add an argument for the port number starting with -p
+    parser.add_argument("-p", "--portnumber", required=True, help="Port number")
+    # Parse the command-line arguments
+    args = parser.parse_args()
+
+    portNumber = args.portnumber
+    return portNumber
 
 
 def send_files(SEPARATOR, file_names, client_socket):
@@ -69,6 +92,10 @@ def main():
     # Define the path to the Unix domain socket
     SEPARATOR = "|"
     client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+
+    # Get the server address and port number from the command line
+    server_host = ip_address()
+    server_port = int(port_number())
 
     try:
         # Connect to the server

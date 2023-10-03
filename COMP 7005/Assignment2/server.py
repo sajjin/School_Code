@@ -7,13 +7,36 @@ import time
 
 
 # Define the size of the buffer
-BUFFER_SIZE = 500
+BUFFER_SIZE = 1024
 
 SEPARATOR = "|"
 
-# Define the server address (host and port)
-server_host = "0.0.0.0"
-server_port = 12345
+
+def ip_address():
+    # Create an argument parser
+    parser = argparse.ArgumentParser(description="A Python script that accepts an IP address.")
+
+    # Add an argument for the IP address starting with -i
+    parser.add_argument("-i", "--ipaddress", required=True, help="IP address")
+    # Parse the command-line arguments
+    args = parser.parse_args()
+
+    ipAddress = args.ipaddress
+    return ipAddress
+
+
+def port_number():
+    # Create an argument parser
+    parser = argparse.ArgumentParser(description="A Python script that accepts a port number.")
+
+    # Add an argument for the port number starting with -p
+    parser.add_argument("-p", "--portnumber", required=True, help="Port number")
+    # Parse the command-line arguments
+    args = parser.parse_args()
+
+    portNumber = args.portnumber
+    return portNumber
+
 
 def storage_directory():
     # Create an argument parser
@@ -64,15 +87,12 @@ def receive_files(connection, storageDirectory):
             received = connection.recv(BUFFER_SIZE).decode()
             if not received:
                 break
-            print(f"\n{received}\n")
             file_info_size = received.split(SEPARATOR)
-            print(f"\n{file_info_size}\n")
             connection.sendall(b"OK")
             try:
                 received = connection.recv(int(file_info_size[0]) + int(file_info_size[1]) + 1).decode()
             except Exception:
                 received = connection.recv(int(file_info_size[0]) + int(file_info_size[1]) + 1)
-            print(f"\n{received}\n")
             file_name, file_size = received.split(SEPARATOR)
             # remove absolute path if there is
             file_name = os.path.basename(file_name)
@@ -100,6 +120,10 @@ def main():
     storageDirectory = storage_directory()
     # storageDirectory = "receive"
 
+    # Get the server address and port number from the command line
+    server_host = ip_address()
+    server_port = int(port_number())
+
     # Create the receive directory if it doesn't exist
     if not os.path.exists(os.path.join(os.path.dirname(__file__),storageDirectory)):
         os.makedirs(os.path.join(os.path.dirname(__file__),storageDirectory))
@@ -124,9 +148,7 @@ def main():
             readable, _, _ = select.select(active_clients, [], [])
 
             for sock in readable:
-                print("loop running\n")
                 if sock == server_socket:
-                    print("True\n")
                     # Accept incoming connection from a client
                     client_socket, client_address = server_socket.accept()
                     print(f"Accepted connection from {client_address}")
@@ -138,7 +160,6 @@ def main():
                     client_receive_directories[client_socket] = storageDirectory
 
                 else:
-                    print("False\n")
                     time.sleep(0.1)
                     # Handle data received from a client
                     receive_files(sock, client_receive_directories[sock])
