@@ -1,9 +1,9 @@
 import socket
 import os
 import tqdm
-import threading
-import time
 import argparse
+import select
+import time
 
 
 # Define the size of the buffer
@@ -11,9 +11,10 @@ BUFFER_SIZE = 1024
 
 SEPARATOR = "|"
 
-# Define the server address (host and port)
-server_host = "127.0.0.1"
+
+server_host = "0.0.0.0"
 server_port = 12345
+
 
 
 def storage_directory():
@@ -60,17 +61,17 @@ def write_file(file_name, file_size, file_path, connection):
 def receive_files(connection, storageDirectory):
 
     try:
-
         # Receive and store files from the client
         while True:
-            
-            # Receive the file name from the client
-            try:
-                received = connection.recv(BUFFER_SIZE).decode()
-            except Exception as e:
-                received = connection.recv(BUFFER_SIZE)
+            received = connection.recv(BUFFER_SIZE).decode()
             if not received:
                 break
+            file_info_size = received.split(SEPARATOR)
+            connection.sendall(b"OK")
+            try:
+                received = connection.recv(int(file_info_size[0]) + int(file_info_size[1]) + 1).decode()
+            except Exception:
+                received = connection.recv(int(file_info_size[0]) + int(file_info_size[1]) + 1)
             file_name, file_size = received.split(SEPARATOR)
             # remove absolute path if there is
             file_name = os.path.basename(file_name)
@@ -84,7 +85,6 @@ def receive_files(connection, storageDirectory):
             file_path = duplicate_files(file_name, storageDirectory)
 
             # Receive and save the file data
-            
             write_file(file_name, file_size, file_path, connection)
 
     except Exception as e:
@@ -94,36 +94,16 @@ def receive_files(connection, storageDirectory):
         connection.close()
 
 
-def handle_client(server_socket, storageDirectory):
-    try:
-        while True:
-            # Accept incoming connection from the client
-            client_socket, client_address = server_socket.accept()
-            print(f"Accepted connection from {client_address}")
-            client_thread = threading.Thread(target=receive_files, args=(client_socket, storageDirectory))
-            client_thread.daemon = True
-            client_thread.start()
-
-
-    except KeyboardInterrupt:
-        print("Thread is shutting down.")
-    except Exception as e:
-        print(f"Error handling client: {e}")
-
-
 def main():
 
     storageDirectory = storage_directory()
-    # storageDirectory = "received_files"
+    # storageDirectory = "receive"
+
 
     # Create the receive directory if it doesn't exist
     if not os.path.exists(os.path.join(os.path.dirname(__file__),storageDirectory)):
         os.makedirs(os.path.join(os.path.dirname(__file__),storageDirectory))
 
-    # Now you can use 'directory_path' in your Python code.
-    print(f"Using directory: {storageDirectory}")
-
-    
     # Create a TCP socket server
     server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 
@@ -131,22 +111,41 @@ def main():
     server_socket.bind((server_host, server_port))
 
     # Listen for incoming connections
-    server_socket.listen(5)
-    print(f"Server is listening on {server_host}:{server_port}")
+    server_socket.listen(1)
+    # Create a list to track active client sockets
+    active_clients = [server_socket]
 
-    # Listen for incoming connections
+    # Create a dictionary to store receive directories for each client
+    client_receive_directories = {server_socket: storageDirectory}
+
     try:
-        t1 = threading.Thread(target=handle_client, args=(server_socket, storageDirectory))
-        t1.daemon = True
-        t1.start()
-
-
         while True:
-            time.sleep(0)
+            # Use select to handle I/O multiplexing
+            readable, _, _ = select.select(active_clients, [], [])
+
+            for sock in readable:
+                if sock == server_socket:
+                    # Accept incoming connection from a client
+                    client_socket, client_address = server_socket.accept()
+                    print(f"Accepted connection from {client_address}")
+
+                    # Add the client socket to the list of active clients
+                    active_clients.append(client_socket)
+
+                    # Store the receive directory in the dictionary
+                    client_receive_directories[client_socket] = storageDirectory
+
+                else:
+                    time.sleep(0.1)
+                    # Handle data received from a client
+                    receive_files(sock, client_receive_directories[sock])
+                    active_clients.remove(sock)
 
     except KeyboardInterrupt:
-        print("Thread is shutting down.")
+        # Handle Ctrl-C to gracefully exit the server
+        print("Server is shutting down.")
         server_socket.close()
+
 
 if __name__ == "__main__":
     main()

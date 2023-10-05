@@ -1,7 +1,6 @@
 import socket
 import os
 import tqdm
-import threading
 import argparse
 
 
@@ -35,9 +34,11 @@ def duplicate_files(file_name):
     original_file_name = file_name
     file_counter = 1
     while True:
+        # check if the file already exists
         file_path = os.path.join(os.path.dirname(__file__), storage_directory, file_name)
         if not os.path.exists(file_path):
             break
+        # split the file name and the extension into two variables
         base_name, extension = os.path.splitext(original_file_name)
         file_name = f"{base_name}_{file_counter}{extension}"
         file_counter += 1
@@ -46,10 +47,12 @@ def duplicate_files(file_name):
 
 
 def write_file(file_name, file_size, file_path, connection):
+    # progress bar
     progress = tqdm.tqdm(range(file_size), f"Receiving {file_name}", unit="B", unit_scale=True, unit_divisor=1024)
     with open(file_path, 'wb') as file:
         received_data = 0
         while received_data < file_size:
+            # receive the bytes from the client
             data = connection.recv(file_size)
             if not data:
                 break
@@ -86,7 +89,6 @@ def receive_files(connection):
             file_path = duplicate_files(file_name)
 
             # Receive and save the file data
-            
             write_file(file_name, file_size, file_path, connection)
 
     except Exception as e:
