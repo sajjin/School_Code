@@ -9,30 +9,14 @@ import argparse
 def utf8len(s):
     return len(s.encode('utf-8'))
 
-def ip_address():
-    # Create an argument parser
-    parser = argparse.ArgumentParser(description="A Python script that accepts an IP address.")
-
-    # Add an argument for the IP address starting with -i
-    parser.add_argument("-i", "--ipaddress", required=True, help="IP address")
-    # Parse the command-line arguments
+def get_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("-i", "--ipadress", help="Server IP address", required=True)
+    parser.add_argument("-p", "--port", help="Server port number", required=True)
+    parser.add_argument("-f", "--file", help="File name", nargs='+', required=True)
+    
     args = parser.parse_args()
-
-    ipAddress = args.ipaddress
-    return ipAddress
-
-
-def port_number():
-    # Create an argument parser
-    parser = argparse.ArgumentParser(description="A Python script that accepts a port number.")
-
-    # Add an argument for the port number starting with -p
-    parser.add_argument("-p", "--portnumber", required=True, help="Port number")
-    # Parse the command-line arguments
-    args = parser.parse_args()
-
-    portNumber = args.portnumber
-    return portNumber
+    return args
 
 
 def send_files(SEPARATOR, file_names, client_socket):
@@ -94,8 +78,11 @@ def main():
     client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 
     # Get the server address and port number from the command line
-    server_host = ip_address()
-    server_port = int(port_number())
+    args = get_args()
+    server_host = str(args.ipadress)
+    server_port = int(args.port)
+    file_names = args.file
+
 
     try:
         # Connect to the server
