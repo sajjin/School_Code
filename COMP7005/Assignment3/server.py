@@ -1,150 +1,171 @@
-import socket
 import os
-import tqdm
-import argparse
+import socket
 import select
-import time
+import argparse
+import tqdm
+from statemachine import StateMachine, State
+import sys
 
 
-# Define the size of the buffer
-BUFFER_SIZE = 1024
+os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
-SEPARATOR = "|"
+class ServerFSM(StateMachine):
+    DISCONNECTED = State('DISCONNECTED', initial=True)
+    ARGS = State('ARGS')
+    CONNECTING = State('CONNECTING')
+    WAITING_FOR_CLIENT = State('WAITING_FOR_CLIENT')
+    RECEIVING_FILE = State('RECEIVING_FILE')
+    DUPLICATE = State('DUPLICATE')
+    WRITE = State('WRITE')
+    REMOVE_CLIENT = State('REMOVE_CLIENT')
 
+    get_args = DISCONNECTED.to(ARGS)
+    connect = ARGS.to(CONNECTING)
+    multiplexing = CONNECTING.to(WAITING_FOR_CLIENT)
+    receive_file = WAITING_FOR_CLIENT.to(RECEIVING_FILE)
+    file_received = REMOVE_CLIENT.to(WAITING_FOR_CLIENT)
+    check_duplicate = RECEIVING_FILE.to(DUPLICATE)
+    write_file = DUPLICATE.to(WRITE)
+    file_received2 = WRITE.to(RECEIVING_FILE)
+    remove_client = RECEIVING_FILE.to(REMOVE_CLIENT)
+    
+    cycle = multiplexing | receive_file |file_received
 
-server_host = "0.0.0.0"
-server_port = 12345
-
-
-
-def storage_directory():
-    # Create an argument parser
-    parser = argparse.ArgumentParser(description="A Python script that accepts a directory path.")
-
-    # Add an argument for the directory path starting with -d
-    parser.add_argument("-d", "--directory", required=True, help="Directory path")
-    # Parse the command-line arguments
-    args = parser.parse_args()
-
-    storageDirectory = args.directory
-    return storageDirectory
-
-
-def duplicate_files(file_name, storageDirectory):
-    original_file_name = file_name
-    file_counter = 1
-    while True:
-        file_path = os.path.join(os.path.dirname(__file__), storageDirectory, file_name)
-        if not os.path.exists(file_path):
-            break
-        base_name, extension = os.path.splitext(original_file_name)
-        file_name = f"{base_name}_{file_counter}{extension}"
-        file_counter += 1
-    file_path = os.path.join(os.path.dirname(__file__), storageDirectory, file_name)
-    return file_path
+    def __init__(self):
+        super().__init__()
+        self.server_socket = None
+        self.active_clients = []
+        self.client_receive_directories = {}
+        self.client_socket = None
+        self.file_name = None
+        self.file_size = None
+        self.file_path = None
 
 
-def write_file(file_name, file_size, file_path, connection):
-    progress = tqdm.tqdm(range(file_size), f"Receiving {file_name}", unit="B", unit_scale=True, unit_divisor=1024)
-    with open(file_path, 'wb') as file:
-        received_data = 0
-        while received_data < file_size:
-            data = connection.recv(file_size)
-            if not data:
-                break
-            file.write(data)
-            received_data += len(data)
-            progress.update(len(data))
-        print(f"Received and saved file: {file_name}")
+    def on_enter_ARGS(self):
+        # Add an argument for the directory path starting with -d
+        parser = argparse.ArgumentParser()
+        parser.add_argument("-i", "--ipaddress", help="Server IP address", required=True)
+        parser.add_argument("-p", "--port", help="Server port number", required=True)
+        parser.add_argument("-d", "--directory", required=True, help="Directory path")
+
+        args = parser.parse_args()
+        self.server_host = str(args.ipaddress)
+        self.server_port = int(args.port)
+        self.storage_directory = args.directory
+        # self.storage_directory = "receive"
+        # self.server_host = "0.0.0.0"
+        # self.server_port = 12345
+        self.connect()
+
+    def on_enter_CONNECTING(self):
+        if not os.path.exists(self.storage_directory):
+            os.makedirs(self.storage_directory)
+
+        print(f"Server is listening on {self.server_host}:{self.server_port}")
+
+        # Create a TCP socket server
+        self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+
+        # Bind the socket to the server address
+        self.server_socket.bind((self.server_host, self.server_port))
+
+        # Listen for incoming connections
+        self.server_socket.listen(1)
+        # Add the server socket to the list of active clients
+        self.active_clients.append(self.server_socket)
+
+        # Add the server socket to the dictionary of receive directories
+        self.client_receive_directories[self.server_socket] = self.storage_directory
+        self.cycle()
 
 
-def receive_files(connection, storageDirectory):
+    def on_enter_WAITING_FOR_CLIENT(self):
+        # Use select to handle I/O multiplexing
+        readable, _, _ = select.select(self.active_clients, [], [])
 
-    try:
-        # Receive and store files from the client
+        for sock in readable:
+            if sock == self.server_socket:
+                # Accept incoming connection from a client
+                client_socket, client_address = self.server_socket.accept()
+                print(f"Accepted connection from {client_address}")
+                # Add the client socket to the list of active clients
+                self.active_clients.append(client_socket)
+                # Add the client socket to the dictionary of receive directories
+                self.client_receive_directories[client_socket] = os.path.join(self.storage_directory, str(client_address))
+                self.cycle()
+
+
+    def on_enter_RECEIVING_FILE(self):
+        # Receive file name and size from client
+        self.client_socket = self.active_clients[1]
+        received = self.client_socket.recv(1024).decode()
+        if not received:
+            self.remove_client()
+            return
+        file_info_size = received.split("|")
+        self.client_socket.sendall(b"OK")
+        try:
+            received = self.client_socket.recv(int(file_info_size[0]) + int(file_info_size[1]) + 1).decode()
+        except Exception:
+            received = self.client_socket.recv(int(file_info_size[0]) + int(file_info_size[1]) + 1)
+        self.file_name, self.file_size = received.split("|")
+        # remove absolute path if there is
+        self.file_name = os.path.basename(self.file_name)
+        # convert to integer
+        self.file_size = int(self.file_size)
+
+        # Check for duplicate file names and handle as desired
+        self.check_duplicate()
+
+
+    def on_enter_REMOVE_CLIENT(self):
+        self.active_clients.remove(self.client_socket)
+        self.cycle()
+
+
+    def on_enter_DUPLICATE(self):
+        original_file_name = self.file_name
+        file_counter = 1
         while True:
-            received = connection.recv(BUFFER_SIZE).decode()
-            if not received:
+            file_path = os.path.join(os.path.dirname(__file__), self.storage_directory, self.file_name)
+            if not os.path.exists(file_path):
                 break
-            file_info_size = received.split(SEPARATOR)
-            connection.sendall(b"OK")
-            try:
-                received = connection.recv(int(file_info_size[0]) + int(file_info_size[1]) + 1).decode()
-            except Exception:
-                received = connection.recv(int(file_info_size[0]) + int(file_info_size[1]) + 1)
-            file_name, file_size = received.split(SEPARATOR)
-            # remove absolute path if there is
-            file_name = os.path.basename(file_name)
-            # convert to integer
-            file_size = int(file_size)
+            base_name, extension = os.path.splitext(original_file_name)
+            self.file_name = f"{base_name}_{file_counter}{extension}"
+            file_counter += 1
+        self.file_path = os.path.join(os.path.dirname(__file__), self.storage_directory, self.file_name)
+        self.write_file()
 
-            if not file_name:
-                break
 
-            # Check for duplicate file names and handle as desired
-            file_path = duplicate_files(file_name, storageDirectory)
-
-            # Receive and save the file data
-            write_file(file_name, file_size, file_path, connection)
-
-    except Exception as e:
-        print(f"Error: {e}")
-    finally:
-        # Clean up the connection
-        connection.close()
+    def on_enter_WRITE(self):
+        progress = tqdm.tqdm(range(self.file_size), f"Receiving {self.file_name}", unit="B", unit_scale=True, unit_divisor=1024)
+        with open(self.file_path, 'wb') as file:
+            received_data = 0
+            while received_data < self.file_size:
+                data = self.client_socket.recv(self.file_size)
+                if not data:
+                    break
+                file.write(data)
+                received_data += len(data)
+                progress.update(len(data))
+            print(f"Received and saved file: {self.file_name}")
+            self.file_received2()
 
 
 def main():
-
-    storageDirectory = storage_directory()
-    # storageDirectory = "receive"
-
-
-    # Create the receive directory if it doesn't exist
-    if not os.path.exists(os.path.join(os.path.dirname(__file__),storageDirectory)):
-        os.makedirs(os.path.join(os.path.dirname(__file__),storageDirectory))
-
-    # Create a TCP socket server
-    server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-
-    # Bind the socket to the server address
-    server_socket.bind((server_host, server_port))
-
-    # Listen for incoming connections
-    server_socket.listen(1)
-    # Create a list to track active client sockets
-    active_clients = [server_socket]
-
-    # Create a dictionary to store receive directories for each client
-    client_receive_directories = {server_socket: storageDirectory}
-
     try:
-        while True:
-            # Use select to handle I/O multiplexing
-            readable, _, _ = select.select(active_clients, [], [])
-
-            for sock in readable:
-                if sock == server_socket:
-                    # Accept incoming connection from a client
-                    client_socket, client_address = server_socket.accept()
-                    print(f"Accepted connection from {client_address}")
-
-                    # Add the client socket to the list of active clients
-                    active_clients.append(client_socket)
-
-                    # Store the receive directory in the dictionary
-                    client_receive_directories[client_socket] = storageDirectory
-
-                else:
-                    time.sleep(0.1)
-                    # Handle data received from a client
-                    receive_files(sock, client_receive_directories[sock])
-                    active_clients.remove(sock)
-
+        fsm = ServerFSM()
+        fsm.get_args()
     except KeyboardInterrupt:
-        # Handle Ctrl-C to gracefully exit the server
-        print("Server is shutting down.")
-        server_socket.close()
+        print("Server stopped by user.")
+    except Exception as e:
+        exc_type, exc_obj, exc_tb = sys.exc_info()
+        print(f"Error: {exc_type}, {e}, {exc_tb.tb_lineno}")
+        exit(1)
+    finally:
+        fsm.server_socket.close()
+        exit(0)
 
 
 if __name__ == "__main__":

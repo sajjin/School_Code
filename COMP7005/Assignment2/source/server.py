@@ -3,44 +3,34 @@ import os
 import tqdm
 import argparse
 import select
-import time
 
 
-# Define the size of the buffer
 BUFFER_SIZE = 1024
-
 SEPARATOR = "|"
 
 
-server_host = "0.0.0.0"
-server_port = 12345
-
-
-
-def storage_directory():
-    # Create an argument parser
-    parser = argparse.ArgumentParser(description="A Python script that accepts a directory path.")
-
+def get_args():
     # Add an argument for the directory path starting with -d
+    parser = argparse.ArgumentParser()
+    parser.add_argument("-i", "--ipaddress", help="Server IP address", required=True)
+    parser.add_argument("-p", "--port", help="Server port number", required=True)
     parser.add_argument("-d", "--directory", required=True, help="Directory path")
-    # Parse the command-line arguments
+
     args = parser.parse_args()
-
-    storageDirectory = args.directory
-    return storageDirectory
+    return args
 
 
-def duplicate_files(file_name, storageDirectory):
+def duplicate_files(file_name, storage_directory):
     original_file_name = file_name
     file_counter = 1
     while True:
-        file_path = os.path.join(os.path.dirname(__file__), storageDirectory, file_name)
+        file_path = os.path.join(os.path.dirname(__file__), storage_directory, file_name)
         if not os.path.exists(file_path):
             break
         base_name, extension = os.path.splitext(original_file_name)
         file_name = f"{base_name}_{file_counter}{extension}"
         file_counter += 1
-    file_path = os.path.join(os.path.dirname(__file__), storageDirectory, file_name)
+    file_path = os.path.join(os.path.dirname(__file__), storage_directory, file_name)
     return file_path
 
 
@@ -58,7 +48,8 @@ def write_file(file_name, file_size, file_path, connection):
         print(f"Received and saved file: {file_name}")
 
 
-def receive_files(connection, storageDirectory):
+def receive_files(connection, storage_directory):
+    print(f"Receiving file info from {connection}")
 
     try:
         # Receive and store files from the client
@@ -82,7 +73,7 @@ def receive_files(connection, storageDirectory):
                 break
 
             # Check for duplicate file names and handle as desired
-            file_path = duplicate_files(file_name, storageDirectory)
+            file_path = duplicate_files(file_name, storage_directory)
 
             # Receive and save the file data
             write_file(file_name, file_size, file_path, connection)
@@ -95,14 +86,20 @@ def receive_files(connection, storageDirectory):
 
 
 def main():
+    args = get_args()
+    server_host = str(args.ipaddress)
+    server_port = int(args.port)
+    storage_directory = args.directory
 
-    storageDirectory = storage_directory()
-    # storageDirectory = "receive"
-
+    # storage_directory = "receive"
+    # server_host = "0.0.0.0"
+    # server_port = 12345
 
     # Create the receive directory if it doesn't exist
-    if not os.path.exists(os.path.join(os.path.dirname(__file__),storageDirectory)):
-        os.makedirs(os.path.join(os.path.dirname(__file__),storageDirectory))
+    if not os.path.exists(os.path.join(os.path.dirname(__file__),storage_directory)):
+        os.makedirs(os.path.join(os.path.dirname(__file__),storage_directory))
+
+    print(f"Server is listening on {server_host}:{server_port}")
 
     # Create a TCP socket server
     server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -116,7 +113,7 @@ def main():
     active_clients = [server_socket]
 
     # Create a dictionary to store receive directories for each client
-    client_receive_directories = {server_socket: storageDirectory}
+    client_receive_directories = {server_socket: storage_directory}
 
     try:
         while True:
@@ -133,13 +130,14 @@ def main():
                     active_clients.append(client_socket)
 
                     # Store the receive directory in the dictionary
-                    client_receive_directories[client_socket] = storageDirectory
+                    client_receive_directories[client_socket] = storage_directory
 
                 else:
-                    time.sleep(0.1)
                     # Handle data received from a client
+                    print(f"Receiving file info from {sock}")
                     receive_files(sock, client_receive_directories[sock])
                     active_clients.remove(sock)
+                    print(f"Closed connection from {client_address}")
 
     except KeyboardInterrupt:
         # Handle Ctrl-C to gracefully exit the server

@@ -1,108 +1,135 @@
+from statemachine import StateMachine, State
 import socket
 import os
 import tqdm
 import time
 import argparse
 
+SEPARATOR = "|"
 
 def utf8len(s):
     return len(s.encode('utf-8'))
 
-def get_args():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("-i", "--ipadress", help="Server IP address", required=True)
-    parser.add_argument("-p", "--port", help="Server port number", required=True)
-    parser.add_argument("-f", "--file", help="File name", nargs='+', required=True)
+class FileSender(StateMachine):
+    # Define states
+    idle = State('Idle', initial=True)
+    myargs = State('Args')
+    connect = State('Connect')
+    sending_meta = State('Sending_Meta')
+    send_data = State('Send_data')
+    done = State('Done')
+
+    # Define transitions
+
+    get_args = idle.to(myargs)
+    connection = myargs.to(connect)
+    start_sending = connect.to(sending_meta)
+    data_send = sending_meta.to(send_data)
+    loop_send = send_data.to(sending_meta)
+    finish_sending = send_data.to(done)
+
+    sends = start_sending | data_send
+
+
+    def __init__(self):
+        super(FileSender, self).__init__()
+        self.file_names = None
+        self.client_socket = None
+        self.server_host = None
+        self.server_port = None
+        self.file_names = None
+        self.args = None
+        self.file_size = None
+        self.file_name = None
+
+    def on_enter_myargs(self):
+        # Create the arguments for CMD line
+        parser = argparse.ArgumentParser()
+        parser.add_argument("-i", "--ipaddress", help="Server IP address", required=True)
+        parser.add_argument("-p", "--port", help="Server port number", required=True)
+        parser.add_argument("-f", "--file", help="File name", nargs='+', required=True)
+        
+        self.args = parser.parse_args()
+        self.server_host = str(self.args.ipaddress)
+        self.server_port = int(self.args.port)
+        self.file_names = self.args.file
+
+        # self.server_host = "10.0.0.137"
+        # self.server_port = 12345
+        # self.file_names = ["test.txt", "nothing.txt", "testing.txt"]
     
-    args = parser.parse_args()
-    return args
+
+    def on_enter_connect(self):
+        # Connect to the server
+        self.client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.client_socket.connect((self.server_host, self.server_port))
 
 
-def send_files(SEPARATOR, file_names, client_socket):
-    try:
-        # Send the number of files to the server
-        file_count = len(file_names)
-        client_socket.send(f"{file_count}".encode())
+    def on_enter_sending_meta(self):
+        try:
+                self.file_size = os.path.getsize(self.file_name)
+                file_name_size = utf8len(self.file_name)
+                file_size_size = utf8len(str(self.file_size))
+                self.client_socket.send(f"{file_name_size}{SEPARATOR}{file_size_size}{SEPARATOR}".encode())
+                confirmation = "NOT OK"
 
-        confirmation1 = 0
-
-        while confirmation1 != file_count:
-            confirmation1 = client_socket.recv(1024).decode('utf-8')
-
-        for file_name in file_names:
-            
-            file_size = os.path.getsize(file_name)
-
-            file_name_size = utf8len(file_name)
-            file_size_size = utf8len(str(file_size))
-            file_details = f"{file_name_size}{SEPARATOR}{file_size_size}{SEPARATOR}"
-            confirmation = "NOT OK"
-            while confirmation != file_details:
-                confirmation = client_socket.recv(1024).decode('utf-8')
-                client_socket.send(file_details.encode())
-            confirmation = "NOT OK"
-
-            while confirmation != "OK":
-                confirmation = client_socket.recv(1024).decode('utf-8')
-                client_socket.send(f"{file_name}{SEPARATOR}{file_size}".encode())
-            
-            send_data(file_size, file_name, client_socket)
-
-    except FileNotFoundError:
-        print("File not found.")
-    except Exception as e:
-        print(f"Error: {e}")
-    finally:
-        # Clean up the client socket
-        client_socket.close()
+                while confirmation != "OK":
+                    confirmation = self.client_socket.recv(1024).decode('utf-8')
+                    self.client_socket.send(f"{self.file_name}{SEPARATOR}{self.file_size}".encode())
+                
+        except FileNotFoundError:
+            print("File not found.")
+        except Exception as e:
+            print(f"Error: {e}")    
+    
+    
+    def on_enter_done(self):
+        self.client_socket.close()
 
 
-def send_data(file_size, file_name, client_socket):
+    def on_enter_send_data(self):
+        # Open the file and send its contents to the server
+        progress = tqdm.tqdm(range(self.file_size), f"Sending {self.file_name}", unit="B", unit_scale=True, unit_divisor=1024)
+        with open(self.file_name, 'rb') as file:
+            while True:
 
-    # Open the file and send its contents to the server
-    progress = tqdm.tqdm(range(file_size), f"Sending {file_name}", unit="B", unit_scale=True, unit_divisor=1024)
-    with open(file_name, 'rb') as file:
-        while True:
-
-            data = file.read(file_size)
-            if not data:
-                break
-            client_socket.send(data)
-            progress.update(len(data))
-    if file_size >= 3073741824:
-        time.sleep(30)
-    elif file_size >= 1073741824:
-        time.sleep(10)
-    elif file_size >= 1000000:
+                data = file.read(self.file_size)
+                if not data:
+                    break
+                self.client_socket.send(data)
+                progress.update(len(data))
+        if self.file_size >= 3073741824:
+            time.sleep(30)
+        elif self.file_size >= 1073741824:
+            time.sleep(10)
+        elif self.file_size >= 1000000:
+            time.sleep(2)
+        
         time.sleep(2)
-    
-    time.sleep(2)
-            
+
 
 def main():
-    # Define the path to the Unix domain socket
-    SEPARATOR = "|"
-    client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-
-    # Get the server address and port number from the command line
-    args = get_args()
-    server_host = str(args.ipadress)
-    server_port = int(args.port)
-    file_names = args.file
-
-
     try:
-        # Connect to the server
-        client_socket.connect((server_host, server_port))
 
-        #  Send multiple files to the server
-        send_files( SEPARATOR, file_names, client_socket)
+        # Create a FileSender and start sending files
+        sender = FileSender()
+        sender.get_args()
+        sender.connection()
+        filenames = sender.file_names
+        for file in filenames:
+            sender.file_name = file
+            if filenames[0] == file:
+                sender.start_sending()
+            else:
+                sender.loop_send()
+            sender.data_send()
+        sender.finish_sending()
+        
     except ConnectionRefusedError:
         print("Connection to the server failed.")
-    finally:
-        # Clean up the client socket
-        client_socket.close()
-
+    except KeyboardInterrupt:
+        print("Client stopped by user.")
+        exit(0)
 
 if __name__ == '__main__':
     main()  # Call the main function
