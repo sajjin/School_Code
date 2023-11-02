@@ -1,6 +1,7 @@
 import os
 import socket
 import select
+import ipaddress
 import argparse
 import tqdm
 from statemachine import StateMachine, State
@@ -23,13 +24,13 @@ class ServerFSM(StateMachine):
     connect = ARGS.to(CONNECTING)
     multiplexing = CONNECTING.to(WAITING_FOR_CLIENT)
     receive_file = WAITING_FOR_CLIENT.to(RECEIVING_FILE)
-    file_received = REMOVE_CLIENT.to(WAITING_FOR_CLIENT)
     check_duplicate = RECEIVING_FILE.to(DUPLICATE)
     write_file = DUPLICATE.to(WRITE)
+    file_received = REMOVE_CLIENT.to(WAITING_FOR_CLIENT)
     file_received2 = WRITE.to(RECEIVING_FILE)
     remove_client = RECEIVING_FILE.to(REMOVE_CLIENT)
     
-    cycle = multiplexing | receive_file |file_received
+    cycle = multiplexing | receive_file | file_received
 
     def __init__(self):
         super().__init__()
@@ -45,18 +46,28 @@ class ServerFSM(StateMachine):
     def on_enter_ARGS(self):
         # Add an argument for the directory path starting with -d
         parser = argparse.ArgumentParser()
-        parser.add_argument("-i", "--ipaddress", help="Server IP address", required=True)
+        parser.add_argument("-i", "--ipaddress", help="Server IP address", required=True, type=self.valid_ip)
         parser.add_argument("-p", "--port", help="Server port number", required=True)
         parser.add_argument("-d", "--directory", required=True, help="Directory path")
 
-        args = parser.parse_args()
-        self.server_host = str(args.ipaddress)
-        self.server_port = int(args.port)
-        self.storage_directory = args.directory
+        print("Server is starting...")
+        self.args = parser.parse_args()
+        self.server_host = str(self.args.ipaddress)
+        self.server_port = int(self.args.port)
+        self.storage_directory = self.args.directory
+
         # self.storage_directory = "receive"
         # self.server_host = "0.0.0.0"
         # self.server_port = 12345
         self.connect()
+
+
+    def valid_ip(self, ip):
+        try:
+            return str(ipaddress.ip_address(ip))
+        except ValueError:
+            raise argparse.ArgumentTypeError("Invalid IP address")
+
 
     def on_enter_CONNECTING(self):
         if not os.path.exists(self.storage_directory):
@@ -64,8 +75,10 @@ class ServerFSM(StateMachine):
 
         print(f"Server is listening on {self.server_host}:{self.server_port}")
 
+        ip_type = socket.AF_INET if ':' not in self.server_host else socket.AF_INET6
+        
         # Create a TCP socket server
-        self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.server_socket = socket.socket(ip_type, socket.SOCK_STREAM)
 
         # Bind the socket to the server address
         self.server_socket.bind((self.server_host, self.server_port))
